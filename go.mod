@@ -2,7 +2,13 @@ module github.com/academo/wasmtest
 
 go 1.22
 
-require github.com/grafana/grafana-plugin-sdk-go v0.260.1
+toolchain go1.23.3
+
+require (
+	github.com/buke/quickjs-go v0.4.15
+	github.com/buke/quickjs-go-polyfill v0.0.9
+	github.com/grafana/grafana-plugin-sdk-go v0.260.1
+)
 
 require (
 	github.com/BurntSushi/toml v1.4.0 // indirect

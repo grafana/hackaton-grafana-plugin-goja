@@ -41,6 +41,7 @@ export class DataSource extends DataSourceApi<MyQuery, MyDataSourceOptions> {
         fields: [
           { name: 'Time', values: [from, to], type: FieldType.time },
           { name: 'Value', values: [target.constant, target.constant], type: FieldType.number },
+          { name: 'Text', values: [target.queryText, target.queryText], type: FieldType.string },
         ],
       });
     });
