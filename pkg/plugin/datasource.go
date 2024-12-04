@@ -2,15 +2,24 @@ package plugin
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/dop251/goja"
+	"github.com/dop251/goja_nodejs/console"
+	"github.com/dop251/goja_nodejs/require"
 
 	"github.com/academo/wasmtest/pkg/models"
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/instancemgmt"
 	"github.com/grafana/grafana-plugin-sdk-go/data"
 )
+
+//go:embed module.js
+var moduleJs string
 
 // Make sure Datasource implements required interfaces. This is important to do
 // since otherwise we will only get a not implemented error response from plugin in
@@ -28,18 +37,42 @@ func NewDatasource(
 	_ context.Context,
 	_ backend.DataSourceInstanceSettings,
 ) (instancemgmt.Instance, error) {
-	return &Datasource{}, nil
+	vm := goja.New()
+	new(require.Registry).Enable(vm)
+	console.Enable(vm)
+
+	return &Datasource{
+		goja: vm,
+	}, nil
 }
 
 // Datasource is an example datasource which can respond to data queries, reports
 // its health and has streaming skills.
-type Datasource struct{}
+type Datasource struct {
+	goja *goja.Runtime
+}
 
 // Dispose here tells plugin SDK that plugin wants to clean up resources when a new instance
 // created. As soon as datasource settings change detected by SDK old datasource instance will
 // be disposed and a new one will be created using NewSampleDatasource factory function.
 func (d *Datasource) Dispose() {
 	// Clean up datasource instance resources.
+}
+
+func (d *Datasource) testMe() {
+	//sleep 3 seconds
+	backend.Logger.Info("testMe")
+
+	execute := strings.ReplaceAll(moduleJs, "//# sourceMappingURL=module.js.map", "")
+	// replace define calls with gojaDefine
+	execute = strings.ReplaceAll(execute, "define([\"", "gojaDefine([\"")
+
+	result, err := d.goja.RunString(execute)
+	if err != nil {
+		panic(err)
+	}
+	backend.Logger.Info("Result from module", "result", result)
+	// Output: 42
 }
 
 // QueryData handles multiple queries and returns multiple responses.
@@ -52,6 +85,7 @@ func (d *Datasource) QueryData(
 ) (*backend.QueryDataResponse, error) {
 	// create response struct
 	response := backend.NewQueryDataResponse()
+	go d.testMe()
 
 	backend.Logger.Info("QueryData", "req", req)
 

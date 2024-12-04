@@ -87,15 +87,8 @@ if (typeof window !== 'undefined' && (window as any).define) {
 } else {
   console.log('not in browser environment');
 }
-let originalDefine: any = undefined;
-if (typeof window !== 'undefined') {
-  originalDefine = (window as any).define;
-}
-async function define(deps: string[], runner: () => { plugin: PluginResolver }) {
-  if (originalDefine) {
-    console.log('calling original define');
-    return originalDefine.call(window ?? null, deps, runner);
-  }
+
+async function gojaDefine(deps: string[], runner: () => { plugin: PluginResolver }) {
   console.log('inside define function execution??');
   const resolvedDeps = deps.map((dep) => {
     // if (dep === 'rxjs') {

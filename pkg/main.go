@@ -3,9 +3,10 @@ package main
 import (
 	"os"
 
+	"github.com/academo/wasmtest/pkg/plugin"
+	"github.com/grafana/grafana-plugin-sdk-go/backend"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/datasource"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/log"
-	"github.com/academo/wasmtest/pkg/plugin"
 )
 
 func main() {
@@ -17,6 +18,7 @@ func main() {
 	// from Grafana to create different instances of SampleDatasource (per datasource
 	// ID). When datasource configuration changed Dispose method will be called and
 	// new datasource instance created using NewSampleDatasource factory.
+	backend.Logger.Info("WHA")
 	if err := datasource.Manage("academo-wasmtest-datasource", plugin.NewDatasource, datasource.ManageOpts{}); err != nil {
 		log.DefaultLogger.Error(err.Error())
 		os.Exit(1)
