@@ -4,7 +4,14 @@ now=$(date +%s000)
 ago=$(date -d '1 hour ago' +%s000)
 port=$(cat dist/standalone.txt | tr -d ':')
 
-json_data=$(echo '{}' | base64)
+json_data=$(cat <<EOF
+{
+  "constant": "10",
+  "queryText": "test"
+}
+EOF
+)
+json_data_base64=$(echo -n "$json_data" | base64)
 
 request=$(cat <<EOF
 {
@@ -25,7 +32,7 @@ request=$(cat <<EOF
       "fromEpochMS": $ago,
       "toEpochMS": $now
     },
-    "json": "$json_data"
+    "json": "$json_data_base64"
   }]
 }
 EOF

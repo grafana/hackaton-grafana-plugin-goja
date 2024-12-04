@@ -34,6 +34,8 @@ export class DataSource extends DataSourceApi<MyQuery, MyDataSourceOptions> {
     const from = range!.from.valueOf();
     const to = range!.to.valueOf();
 
+    const text = 'Hi from frontend ' + Math.floor(Math.random() * 100);
+
     // Return a constant for each query.
     const data = options.targets.map((target) => {
       return createDataFrame({
@@ -41,7 +43,7 @@ export class DataSource extends DataSourceApi<MyQuery, MyDataSourceOptions> {
         fields: [
           { name: 'Time', values: [from, to], type: FieldType.time },
           { name: 'Value', values: [target.constant, target.constant], type: FieldType.number },
-          { name: 'Text', values: [target.queryText, target.queryText], type: FieldType.string },
+          { name: 'Text', values: [target.queryText, text], type: FieldType.string },
         ],
       });
     });

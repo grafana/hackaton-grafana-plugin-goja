@@ -88,6 +88,8 @@ if (typeof window !== 'undefined' && (window as any).define) {
   console.log('not in browser environment');
 }
 
+let pluginInstance: any | undefined;
+
 async function gojaDefine(deps: string[], runner: () => { plugin: PluginResolver }) {
   console.log('inside define function execution??');
   const resolvedDeps = deps.map((dep) => {
@@ -99,28 +101,44 @@ async function gojaDefine(deps: string[], runner: () => { plugin: PluginResolver
     }
     return allProxy;
   });
-  console.log('Running plugin code');
+  // console.log('Running plugin code');
   //@ts-ignore
   const result = runner.apply(null, resolvedDeps);
   console.log('Creating plugin instance');
   const plugin = new result.plugin.DataSourceClass({});
-  const constant = Math.floor(Math.random() * 100);
-  const query = `Test query with constant ${constant}`;
-  console.log(`Querying with constant ${constant} and text: ${query}`);
-  const queryResult = await plugin.query({
-    targets: [
-      {
-        constant: constant,
-        queryText: query,
-        refId: 'A',
-      },
-    ],
-    range: {
-      from: new Date(),
-      to: new Date(),
-    },
-  });
-  console.log('Query result: ', JSON.stringify(queryResult, null, 2));
+  pluginInstance = plugin;
+  console.log('Plugin instance created');
+  // const constant = Math.floor(Math.random() * 100);
+  // const query = `Test query with constant ${constant}`;
+  // console.log(`Querying with constant ${constant} and text: ${query}`);
+  // const queryResult = await plugin.query({
+  //   targets: [
+  //     {
+  //       constant: constant,
+  //       queryText: query,
+  //       refId: 'A',
+  //     },
+  //   ],
+  //   range: {
+  //     from: new Date(),
+  //     to: new Date(),
+  //   },
+  // });
+  // console.log('Query result: ', JSON.stringify(queryResult, null, 2));
+  console.log('returning ok');
+  return 'OK from define';
+}
+
+async function runQuery(query: string) {
+  if (!pluginInstance) {
+    console.log('No plugin instance');
+    throw new Error('No plugin instance');
+  }
+  const queryParsed = JSON.parse(query);
+  console.log('query is?', JSON.stringify(queryParsed, null, 2));
+  const queryResult = await pluginInstance.query(queryParsed);
+  console.log('executed query and got result: ', JSON.stringify(queryResult, null, 2));
+  return JSON.stringify(queryResult);
 }
 
 console.log('Running actual plugin code');

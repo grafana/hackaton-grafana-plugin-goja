@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,7 +60,8 @@ func (d *Datasource) Dispose() {
 	// Clean up datasource instance resources.
 }
 
-func (d *Datasource) testMe() {
+// todo return string, err instead of panics
+func (d *Datasource) queryFeDS(q backend.QueryDataRequest) string {
 	//sleep 3 seconds
 	backend.Logger.Info("testMe")
 
@@ -67,12 +69,76 @@ func (d *Datasource) testMe() {
 	// replace define calls with gojaDefine
 	execute = strings.ReplaceAll(execute, "define([\"", "gojaDefine([\"")
 
-	result, err := d.goja.RunString(execute)
+	_, err := d.goja.RunString(execute)
 	if err != nil {
 		panic(err)
 	}
-	backend.Logger.Info("Result from module", "result", result)
-	// Output: 42
+
+	runQuery, ok := goja.AssertFunction(d.goja.Get("runQuery"))
+	if !ok {
+		panic("Not a function")
+	}
+
+	var qm queryModel
+	_ = json.Unmarshal(q.Queries[0].JSON, &qm)
+	query := FrontendQueryModel{
+		App:       "dashboard",
+		RequestID: "SQR101",
+		Timezone:  "browser",
+		Range: TimeRange{
+			From: q.Queries[0].TimeRange.From.Format(time.RFC3339),
+			To:   q.Queries[0].TimeRange.To.Format(time.RFC3339),
+			Raw: struct {
+				From string `json:"from"`
+				To   string `json:"to"`
+			}{
+				From: q.Queries[0].TimeRange.From.Format(time.RFC3339),
+				To:   q.Queries[0].TimeRange.To.Format(time.RFC3339),
+			},
+		},
+		Interval:   "30s",
+		IntervalMs: 30000,
+		Targets: []Target{
+			{
+				Constant: parsedConstant(qm.Constant),
+				DataSource: DataSource{
+					Type: q.PluginContext.DataSourceInstanceSettings.Type,
+					UID:  q.PluginContext.DataSourceInstanceSettings.UID,
+				},
+				QueryText: qm.QueryText,
+				RefID:     q.Queries[0].RefID,
+			},
+		},
+	}
+
+	queryJson, err := json.Marshal(query)
+	if err != nil {
+		panic(err)
+	}
+
+	value, err := runQuery(
+		goja.Undefined(),
+		d.goja.ToValue(string(queryJson)),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	var result any
+	if p, ok := value.Export().(*goja.Promise); ok {
+		switch p.State() {
+		//todo, handle rejected
+		case goja.PromiseStateRejected:
+			panic(p.Result().String())
+		case goja.PromiseStateFulfilled:
+			result = p.Result().Export()
+		default:
+			//todo handle unexpected
+			panic("unexpected promise state pending")
+		}
+	}
+
+	return result.(string)
 }
 
 // QueryData handles multiple queries and returns multiple responses.
@@ -83,59 +149,110 @@ func (d *Datasource) QueryData(
 	ctx context.Context,
 	req *backend.QueryDataRequest,
 ) (*backend.QueryDataResponse, error) {
-	// create response struct
-	response := backend.NewQueryDataResponse()
-	go d.testMe()
 
 	backend.Logger.Info("QueryData", "req", req)
-
-	// loop over queries and execute them individually.
-	for _, q := range req.Queries {
-		res := d.query(ctx, req.PluginContext, q)
-
-		// save the response in a hashmap
-		// based on with RefID as identifier
-		response.Responses[q.RefID] = res
-	}
-
-	return response, nil
+	rawFEresponse := d.queryFeDS(*req)
+	backend.Logger.Info("I am returning the parsed FE response")
+	parsed := convertJSResultToQueryDataResponse(rawFEresponse)
+	backend.Logger.Info("parsed", parsed)
+	return parsed, nil
 }
 
-type queryModel struct{}
+func convertJSResultToQueryDataResponse(resultStr string) *backend.QueryDataResponse {
+	response := backend.NewQueryDataResponse()
 
-func (d *Datasource) query(
-	_ context.Context,
-	pCtx backend.PluginContext,
-	query backend.DataQuery,
-) backend.DataResponse {
-	var response backend.DataResponse
-
-	// Unmarshal the JSON into our queryModel.
-	var qm queryModel
-
-	err := json.Unmarshal(query.JSON, &qm)
-	if err != nil {
-		return backend.ErrDataResponse(
-			backend.StatusBadRequest,
-			fmt.Sprintf("json unmarshal: %v", err.Error()),
-		)
+	var parsed struct {
+		Data []struct {
+			RefID  string `json:"refId"`
+			Fields []struct {
+				Name   string `json:"name"`
+				Values []any  `json:"values"`
+				Type   string `json:"type"`
+			} `json:"fields"`
+			Length int `json:"length"`
+		} `json:"data"`
 	}
 
-	// create data frame response.
-	// For an overview on data frames and how grafana handles them:
-	// https://grafana.com/developers/plugin-tools/introduction/data-frames
-	frame := data.NewFrame("response")
+	if err := json.Unmarshal([]byte(resultStr), &parsed); err != nil {
+		// Since we need to return a QueryDataResponse, we'll add the error to the response
+		response.Responses["A"] = backend.DataResponse{
+			Error:  fmt.Errorf("json unmarshal: %v", err),
+			Status: backend.StatusBadRequest,
+		}
+		return response
+	}
 
-	// add fields.
-	frame.Fields = append(frame.Fields,
-		data.NewField("time", nil, []time.Time{query.TimeRange.From, query.TimeRange.To}),
-		data.NewField("values", nil, []int64{10, 20}),
-	)
+	for _, d := range parsed.Data {
+		frame := data.NewFrame(d.RefID)
 
-	// add the frames to the response.
-	response.Frames = append(response.Frames, frame)
+		for _, f := range d.Fields {
+			var field *data.Field
+			switch f.Type {
+			case "time":
+				times := make([]time.Time, len(f.Values))
+				for i, v := range f.Values {
+					t, _ := time.Parse(time.RFC3339, v.(string))
+					times[i] = t
+				}
+				field = data.NewField(f.Name, nil, times)
+			case "number":
+				numbers := make([]float64, len(f.Values))
+				for i, v := range f.Values {
+					numbers[i] = v.(float64)
+				}
+				field = data.NewField(f.Name, nil, numbers)
+			case "string":
+				strings := make([]string, len(f.Values))
+				for i, v := range f.Values {
+					strings[i] = v.(string)
+				}
+				field = data.NewField(f.Name, nil, strings)
+			}
+			frame.Fields = append(frame.Fields, field)
+		}
+
+		response.Responses[d.RefID] = backend.DataResponse{
+			Frames: []*data.Frame{frame},
+		}
+	}
 
 	return response
+}
+
+type queryModel struct {
+	QueryText string `json:"queryText"`
+	Constant  string `json:"constant"`
+}
+
+type TimeRange struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	Raw  struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	} `json:"raw"`
+}
+
+type DataSource struct {
+	Type string `json:"type"`
+	UID  string `json:"uid"`
+}
+
+type Target struct {
+	Constant   float64    `json:"constant"`
+	DataSource DataSource `json:"datasource"`
+	QueryText  string     `json:"queryText"`
+	RefID      string     `json:"refId"`
+}
+
+type FrontendQueryModel struct {
+	App        string    `json:"app"`
+	RequestID  string    `json:"requestId"`
+	Timezone   string    `json:"timezone"`
+	Range      TimeRange `json:"range"`
+	Interval   string    `json:"interval"`
+	IntervalMs int       `json:"intervalMs"`
+	Targets    []Target  `json:"targets"`
 }
 
 // CheckHealth handles health checks sent from Grafana to the plugin.
@@ -165,4 +282,9 @@ func (d *Datasource) CheckHealth(
 		Status:  backend.HealthStatusOk,
 		Message: "Data source is working",
 	}, nil
+}
+
+func parsedConstant(s string) float64 {
+	f, _ := strconv.ParseFloat(s, 64)
+	return f
 }
