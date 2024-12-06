@@ -1,3 +1,4 @@
+// this file is just a proxy for the grafana frontend
 import { CoreApp, DataSourceInstanceSettings } from '@grafana/data';
 
 import { MyQuery, MyDataSourceOptions } from './types';

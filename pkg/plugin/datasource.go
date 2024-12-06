@@ -5,13 +5,16 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/dop251/goja"
-	"github.com/dop251/goja_nodejs/console"
-	"github.com/dop251/goja_nodejs/require"
+	"github.com/gorilla/websocket"
 
 	"github.com/academo/wasmtest/pkg/models"
 	"github.com/grafana/grafana-plugin-sdk-go/backend"
@@ -38,19 +41,46 @@ func NewDatasource(
 	_ context.Context,
 	_ backend.DataSourceInstanceSettings,
 ) (instancemgmt.Instance, error) {
-	vm := goja.New()
-	new(require.Registry).Enable(vm)
-	console.Enable(vm)
+	nodeCmd, err := startNodeProcess()
+	if err != nil {
+		return nil, err
+	}
+
+	//wait 2 seconds
+	time.Sleep(2 * time.Second)
 
 	return &Datasource{
-		goja: vm,
+		nodeCmd: nodeCmd,
 	}, nil
+}
+
+func startNodeProcess() (*exec.Cmd, error) {
+	execute := strings.ReplaceAll(moduleJs, "//# sourceMappingURL=module.js.map", "")
+	// write somewhere to a temp file
+
+	tmpFile, err := os.CreateTemp("", "module.js")
+	if err != nil {
+		return nil, err
+	}
+
+	//write the file
+	if _, err := tmpFile.WriteString(execute); err != nil {
+		return nil, err
+	}
+	tmpFile.Close()
+
+	cmd := exec.Command("node", tmpFile.Name())
+	cmd.Stdout = os.Stdout
+	err = cmd.Start()
+
+	return cmd, err
 }
 
 // Datasource is an example datasource which can respond to data queries, reports
 // its health and has streaming skills.
 type Datasource struct {
-	goja *goja.Runtime
+	nodeCmd *exec.Cmd
+	socket  *websocket.Conn
 }
 
 // Dispose here tells plugin SDK that plugin wants to clean up resources when a new instance
@@ -58,26 +88,16 @@ type Datasource struct {
 // be disposed and a new one will be created using NewSampleDatasource factory function.
 func (d *Datasource) Dispose() {
 	// Clean up datasource instance resources.
+	err := d.nodeCmd.Process.Kill()
+	if err != nil {
+		panic(err)
+	}
 }
 
 // todo return string, err instead of panics
 func (d *Datasource) queryFeDS(q backend.QueryDataRequest) string {
 	//sleep 3 seconds
 	backend.Logger.Info("testMe")
-
-	execute := strings.ReplaceAll(moduleJs, "//# sourceMappingURL=module.js.map", "")
-	// replace define calls with gojaDefine
-	execute = strings.ReplaceAll(execute, "define([\"", "gojaDefine([\"")
-
-	_, err := d.goja.RunString(execute)
-	if err != nil {
-		panic(err)
-	}
-
-	runQuery, ok := goja.AssertFunction(d.goja.Get("runQuery"))
-	if !ok {
-		panic("Not a function")
-	}
 
 	var qm queryModel
 	_ = json.Unmarshal(q.Queries[0].JSON, &qm)
@@ -116,29 +136,20 @@ func (d *Datasource) queryFeDS(q backend.QueryDataRequest) string {
 		panic(err)
 	}
 
-	value, err := runQuery(
-		goja.Undefined(),
-		d.goja.ToValue(string(queryJson)),
-	)
+	resp, err := http.Post("http://localhost:8080/query",
+		"application/json",
+		strings.NewReader(string(queryJson)))
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	var result any
-	if p, ok := value.Export().(*goja.Promise); ok {
-		switch p.State() {
-		//todo, handle rejected
-		case goja.PromiseStateRejected:
-			panic(p.Result().String())
-		case goja.PromiseStateFulfilled:
-			result = p.Result().Export()
-		default:
-			//todo handle unexpected
-			panic("unexpected promise state pending")
-		}
-	}
-
-	return result.(string)
+	return string(respBody)
 }
 
 // QueryData handles multiple queries and returns multiple responses.
@@ -152,29 +163,33 @@ func (d *Datasource) QueryData(
 
 	backend.Logger.Info("QueryData", "req", req)
 	rawFEresponse := d.queryFeDS(*req)
+	backend.Logger.Info("rawFEresponse", rawFEresponse)
 	backend.Logger.Info("I am returning the parsed FE response")
 	parsed := convertJSResultToQueryDataResponse(rawFEresponse)
 	backend.Logger.Info("parsed", parsed)
 	return parsed, nil
 }
 
+type todoField struct {
+	Name   string `json:"name"`
+	Values []any  `json:"values"`
+	Type   string `json:"type"`
+}
+
+type todoData struct {
+	RefID  string      `json:"refId"`
+	Fields []todoField `json:"fields"`
+}
+
+type parsedResponse struct {
+	Data []todoData `json:"data"`
+}
+
 func convertJSResultToQueryDataResponse(resultStr string) *backend.QueryDataResponse {
 	response := backend.NewQueryDataResponse()
-
-	var parsed struct {
-		Data []struct {
-			RefID  string `json:"refId"`
-			Fields []struct {
-				Name   string `json:"name"`
-				Values []any  `json:"values"`
-				Type   string `json:"type"`
-			} `json:"fields"`
-			Length int `json:"length"`
-		} `json:"data"`
-	}
+	var parsed parsedResponse
 
 	if err := json.Unmarshal([]byte(resultStr), &parsed); err != nil {
-		// Since we need to return a QueryDataResponse, we'll add the error to the response
 		response.Responses["A"] = backend.DataResponse{
 			Error:  fmt.Errorf("json unmarshal: %v", err),
 			Status: backend.StatusBadRequest,
@@ -184,38 +199,34 @@ func convertJSResultToQueryDataResponse(resultStr string) *backend.QueryDataResp
 
 	for _, d := range parsed.Data {
 		frame := data.NewFrame(d.RefID)
-
 		for _, f := range d.Fields {
 			var field *data.Field
 			switch f.Type {
-			case "time":
-				times := make([]time.Time, len(f.Values))
-				for i, v := range f.Values {
-					t, _ := time.Parse(time.RFC3339, v.(string))
-					times[i] = t
-				}
-				field = data.NewField(f.Name, nil, times)
 			case "number":
-				numbers := make([]float64, len(f.Values))
+				nums := make([]float64, len(f.Values))
 				for i, v := range f.Values {
-					numbers[i] = v.(float64)
+					nums[i] = v.(float64)
 				}
-				field = data.NewField(f.Name, nil, numbers)
+				field = data.NewField(f.Name, nil, nums)
 			case "string":
-				strings := make([]string, len(f.Values))
+				strs := make([]string, len(f.Values))
 				for i, v := range f.Values {
-					strings[i] = v.(string)
+					strs[i] = v.(string)
 				}
-				field = data.NewField(f.Name, nil, strings)
+				field = data.NewField(f.Name, nil, strs)
+			case "boolean":
+				bools := make([]bool, len(f.Values))
+				for i, v := range f.Values {
+					bools[i] = v.(bool)
+				}
+				field = data.NewField(f.Name, nil, bools)
 			}
 			frame.Fields = append(frame.Fields, field)
 		}
-
 		response.Responses[d.RefID] = backend.DataResponse{
 			Frames: []*data.Frame{frame},
 		}
 	}
-
 	return response
 }
 

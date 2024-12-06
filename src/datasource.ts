@@ -34,29 +34,21 @@ export class DataSource extends DataSourceApi<MyQuery, MyDataSourceOptions> {
     const from = range!.from.valueOf();
     const to = range!.to.valueOf();
 
-    try {
-      const req = await fetch('https://jsonplaceholder.typicode.com/todos');
-      const data = await req.json();
-      console.log('data from fetch', data);
-    } catch (e) {
-      console.log('error with fetch', e);
-    }
+    const req = await fetch('https://jsonplaceholder.typicode.com/todos');
+    const todos = await req.json();
+    console.log('data from fetch', todos);
 
-    const text = 'Hi from frontend ' + Math.floor(Math.random() * 100);
-
-    // Return a constant for each query.
     const data = options.targets.map((target) => {
       return createDataFrame({
         refId: target.refId,
         fields: [
-          { name: 'Time', values: [from, to], type: FieldType.time },
-          { name: 'Value', values: [target.constant, target.constant], type: FieldType.number },
-          { name: 'Text', values: [target.queryText, text], type: FieldType.string },
+          { name: 'userId', values: todos.map((t) => t.userId), type: FieldType.number },
+          { name: 'id', values: todos.map((t) => t.id), type: FieldType.number },
+          { name: 'title', values: todos.map((t) => t.title), type: FieldType.string },
+          { name: 'completed', values: todos.map((t) => t.completed), type: FieldType.boolean },
         ],
       });
     });
-    console.log('Will return data:', data);
-
     return { data };
   }
 

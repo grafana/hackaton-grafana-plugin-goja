@@ -11,6 +11,7 @@ ARG GO_ARCH=${TARGETARCH:-amd64}
 
 ENV DEV "${development}"
 
+
 # Make it as simple as possible to access the grafana instance for development purposes
 # Do NOT enable these settings in a public facing / production grafana instance
 ENV GF_AUTH_ANONYMOUS_ORG_ROLE "Admin"
@@ -26,6 +27,8 @@ ENV GF_PATHS_HOME="/usr/share/grafana"
 WORKDIR $GF_PATHS_HOME
 
 USER root
+
+RUN apk add nodejs
 
 # Installing supervisor and inotify-tools
 RUN if [ "${development}" = "true" ]; then \
