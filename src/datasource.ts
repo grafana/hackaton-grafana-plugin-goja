@@ -34,6 +34,14 @@ export class DataSource extends DataSourceApi<MyQuery, MyDataSourceOptions> {
     const from = range!.from.valueOf();
     const to = range!.to.valueOf();
 
+    try {
+      const req = await fetch('https://jsonplaceholder.typicode.com/todos');
+      const data = await req.json();
+      console.log('data from fetch', data);
+    } catch (e) {
+      console.log('error with fetch', e);
+    }
+
     const text = 'Hi from frontend ' + Math.floor(Math.random() * 100);
 
     // Return a constant for each query.
