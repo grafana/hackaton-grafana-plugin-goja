@@ -21,6 +21,7 @@ services:
       - ./dist:/var/lib/grafana/plugins/academo-wasmtest-datasource
       - ./provisioning:/etc/grafana/provisioning
       - .:/root/academo-wasmtest-datasource
+      - ./data:/usr/local/var/lib/grafana
 
     environment:
       NODE_ENV: development
